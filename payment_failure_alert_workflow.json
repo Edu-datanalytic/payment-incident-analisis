@@ -1,0 +1,233 @@
+{
+  "name": "Payment failure alert workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -368,
+        -16
+      ],
+      "id": "cfbd27f1-8970-4ffc-9017-45ecd5b63cc6",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9810b32b-2822-4eb8-9493-b520b7bd1dd4",
+              "name": "error_rate_threshold_pct",
+              "value": 30,
+              "type": "number"
+            },
+            {
+              "id": "be1dd5a0-49e8-42db-9b38-0adb341920d5",
+              "name": "window_minutes",
+              "value": 15,
+              "type": "number"
+            },
+            {
+              "id": "f3a69dcc-98cc-4332-8b31-a89dfaf58c4c",
+              "name": "min_sample_size",
+              "value": 5,
+              "type": "number"
+            },
+            {
+              "id": "2d2c3674-e81e-4816-bc19-bb8bfb0f3867",
+              "name": "slack_channel",
+              "value": "#payment-alerts",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -224,
+        -16
+      ],
+      "id": "256225bf-39b5-4d50-b2b5-ae0cd7d0af79",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH windowed AS (\n  SELECT *\n  FROM transactions\n  WHERE created_at >= (\n    SELECT MAX(created_at)\n    FROM transactions\n  )  - INTERVAL '{{ $json.window_minutes }} minutes'\n),\n\nagg AS (\n  SELECT\n    provider,\n    biller_id,\n    COUNT(*) AS total,\n    COUNT(*) FILTER (WHERE status = 'failed') AS failed,\n    ROUND(\n      100.0 * COUNT(*) FILTER (WHERE status = 'failed')\n      / NULLIF(COUNT(*), 0),\n      1\n    ) AS error_rate_pct,\n    MIN(created_at) FILTER (WHERE status = 'failed') AS first_failure_at,\n    MAX(error_code) FILTER (WHERE status = 'failed') AS error_code,\n    STRING_AGG(DISTINCT partner_id, ', ') AS partners_affected\n  FROM windowed\n  GROUP BY provider, biller_id\n)\n\nSELECT *\nFROM agg\nWHERE  error_rate_pct > {{ $json.error_rate_threshold_pct }}\n     AND total >= {{ $json.min_sample_size }}\nORDER BY error_rate_pct DESC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -96,
+        -16
+      ],
+      "id": "51bb2f29-e7a8-4752-b129-e19ad3ab6a66",
+      "name": "Execute a SQL query"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "18804802-c2e2-467b-ba24-c38fff54539a",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        32,
+        -16
+      ],
+      "id": "0e4953c0-87e1-423a-89ac-74c0adffb081",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "TU_API_KEY_AQUI"
+            },
+            {
+              "name": "anthropic_version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content_type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 400,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Analiza estas transacciones. Proveedor: {{ $json.provider }}. Biller: {{ $json.biller_id }}. Total: {{ $json.total }}. Fallidas: {{ $json.failed }}. Explica el problema y qué debería revisarse.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        -96
+      ],
+      "id": "07be478e-47d5-478a-a6f5-55d9a896d136",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#payment-alerts",
+          "mode": "name"
+        },
+        "text": "={{ $json.content[0].text }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        448,
+        -96
+      ],
+      "id": "2d697e52-38d6-418f-a3e6-6cd965f7fc09",
+      "name": "Send a message"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
